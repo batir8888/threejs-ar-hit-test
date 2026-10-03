@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#14241f" />
+    <meta name="description" content="Разместите виртуальный куб или кресло на настоящей поверхности. WebAR на Three.js и WebXR с hit-test." />
+    <title>Плоскость — объекты в вашем пространстве</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  </head>
+  <body>
+    <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="icon-cube" viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v9"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+      <symbol id="icon-scan" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M7 12h10m-5-5v10"/></symbol>
+      <symbol id="icon-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 5h4m-3 14h2"/></symbol>
+      <symbol id="icon-chair" viewBox="0 0 24 24"><path d="M6 12V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v7M4 10v7h16v-7M7 17v4m10-4v4M4 13h16"/></symbol>
+      <symbol id="icon-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="icon-github" viewBox="0 0 24 24"><path d="M9 19c-5 1-5-3-7-3m14 6v-4a3.4 3.4 0 0 0-1-2.6c3.3-.4 6.8-1.6 6.8-7.3a5.7 5.7 0 0 0-1.5-3.9 5.2 5.2 0 0 0-.1-3.9s-1.3-.4-4.2 1.5a13.4 13.4 0 0 0-8 0C5.1-1.1 3.8-.7 3.8-.7a5.2 5.2 0 0 0-.1 3.9 5.7 5.7 0 0 0-1.5 3.9c0 5.7 3.5 6.9 6.8 7.3A3.4 3.4 0 0 0 8 17v5" transform="translate(0 2) scale(.92)"/></symbol>
+    </svg>
+
+    <div id="landing" class="page-shell">
+      <header class="site-header">
+        <a class="wordmark" href="./" aria-label="Плоскость — главная"><span class="brand-mark"><svg><use href="#icon-cube" /></svg></span>плоскость<span class="brand-dot">.</span></a>
+        <div class="header-right"><span class="lab-label">ПРАКТИКА <span>04</span></span><a class="source-link" href="https://github.com/batir8888/threejs-ar-hit-test" target="_blank" rel="noopener noreferrer"><svg><use href="#icon-github" /></svg><span>Исходный код</span><span aria-hidden="true">↗</span></a></div>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <div class="eyebrow"><span class="live-dot"></span>ВАШЕ ПРОСТРАНСТВО. НОВЫЕ ВОЗМОЖНОСТИ.</div>
+            <h1 id="hero-title">Вещи на<br /><span>своих местах.</span></h1>
+            <p class="hero-description">Добавьте немного виртуального в реальный мир. Найдите поверхность, коснитесь экрана — и объект станет частью вашего пространства.</p>
+            <div id="support-badge" class="support-badge" data-state="checking" role="status"><span class="status-dot"></span><span id="support-label">Проверяем поддержку AR…</span></div>
+            <div class="hero-actions">
+              <button id="start-ar" class="button button-primary" disabled><svg><use href="#icon-scan" /></svg><span id="start-label">Открыть AR</span><svg class="button-arrow"><use href="#icon-arrow" /></svg></button>
+              <button id="show-help" class="button button-text">Как это работает <span aria-hidden="true">↗</span></button>
+            </div>
+            <p id="support-hint" class="support-hint">Для AR понадобится устройство с поддержкой WebXR.</p>
+            <p id="error-message" class="error-message" role="alert" hidden></p>
+          </div>
+
+          <div class="preview-card">
+            <div class="preview-header"><span class="preview-heading"><span class="small-cross">+</span> КОЛЛЕКЦИЯ ОБЪЕКТОВ</span><span class="preview-tag">3D-просмотр</span></div>
+            <div id="preview-stage" class="preview-stage" role="img" aria-label="Интерактивный 3D-просмотр выбранного объекта">
+              <span class="corner corner-tl"></span><span class="corner corner-tr"></span><span class="corner corner-bl"></span><span class="corner corner-br"></span>
+              <div class="preview-annotation"><span class="annotation-dot"></span><span id="preview-size">30 × 30 × 30 см</span></div>
+              <p id="preview-error" class="preview-error" role="alert" hidden></p>
+              <div class="preview-footnote"><span>↔</span> Потяните, чтобы повернуть</div>
+            </div>
+            <div class="preview-bottom">
+              <div class="object-summary"><span class="object-index" id="object-index">01 / 02</span><h2 id="object-name">Куб</h2><span id="object-caption">Простая форма. Реальный масштаб.</span></div>
+              <div class="object-switcher" role="group" aria-label="Выберите объект">
+                <button class="object-option selected" data-model="cube" aria-pressed="true" aria-label="Куб"><svg><use href="#icon-cube" /></svg></button>
+                <button class="object-option" data-model="chair" aria-pressed="false" aria-label="Кресло"><svg><use href="#icon-chair" /></svg></button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="guide" aria-labelledby="guide-title">
+          <div class="guide-intro"><span class="section-kicker">ИЗ ЭКРАНА — В КОМНАТУ</span><h2 id="guide-title">Три шага.<br />Никаких установок.</h2></div>
+          <ol class="steps">
+            <li><div class="step-top"><span class="step-number">01</span><svg><use href="#icon-phone" /></svg></div><h3>Откройте камеру</h3><p>Запустите AR и разрешите доступ к камере на вашем устройстве.</p></li>
+            <li><div class="step-top"><span class="step-number">02</span><svg><use href="#icon-scan" /></svg></div><h3>Найдите поверхность</h3><p>Плавно двигайте телефон. Зелёное кольцо покажет место для объекта.</p></li>
+            <li><div class="step-top"><span class="step-number">03</span><svg><use href="#icon-pin" /></svg></div><h3>Поставьте объект</h3><p>Коснитесь экрана и обойдите объект. Он останется на выбранном месте.</p></li>
+          </ol>
+        </section>
+      </main>
+
+      <footer class="site-footer"><span>Немного кода. Новое измерение.</span><div><span>THREE.JS</span><span class="footer-dot">·</span><span>WEBXR</span><span class="footer-dot">·</span><span>HIT-TEST</span></div></footer>
+    </div>
+
+    <div id="xr-overlay" class="xr-overlay" hidden>
+      <div class="xr-top"><span class="xr-brand">плоскость<span> .</span></span><button id="end-ar" class="button-icon xr-control" aria-label="Завершить AR"><svg><use href="#icon-close" /></svg></button></div>
+      <div class="xr-status" role="status"><span class="status-dot"></span><span id="xr-status-text">Ищем поверхность…</span></div>
+      <div class="aim-cross" aria-hidden="true"></div>
+      <div class="xr-bottom">
+        <p id="xr-instruction">Плавно двигайте телефон, направив камеру на пол или стол.</p>
+        <div class="xr-toolbar xr-control"><div class="xr-models" role="group" aria-label="Объект для размещения"><button class="xr-model selected" data-model="cube" aria-pressed="true"><svg><use href="#icon-cube" /></svg>Куб</button><button class="xr-model" data-model="chair" aria-pressed="false"><svg><use href="#icon-chair" /></svg>Кресло</button></div><button id="clear-objects" class="button-icon" aria-label="Удалить все объекты" disabled><svg><use href="#icon-trash" /></svg></button></div>
+        <button id="place-object" class="button button-primary xr-control" disabled><svg><use href="#icon-pin" /></svg><span>Разместить здесь</span><span id="placed-count" class="count-badge">0</span></button>
+      </div>
+    </div>
+
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="dialog-heading"><span class="section-kicker">ПОДСКАЗКИ</span><button id="close-help" class="button-icon" aria-label="Закрыть подсказки"><svg><use href="#icon-close" /></svg></button></div>
+      <h2 id="help-title">Готовы к новому<br />измерению?</h2>
+      <p>Откройте эту страницу в Chrome на Android с поддержкой WebXR и ARCore. Нажмите «Открыть AR» и разрешите доступ к камере.</p>
+      <ol class="help-steps"><li>Выберите куб или кресло.</li><li>Наведите камеру на хорошо освещённый пол или стол. Плавно перемещайте телефон, пока не появится зелёное кольцо.</li><li>Коснитесь экрана или кнопки «Разместить здесь». Можно поставить несколько объектов.</li><li>Переместите телефон и посмотрите на объекты с другой стороны. Кнопка с корзиной очищает сцену, крестик завершает AR.</li></ol>
+      <div class="desktop-note"><svg><use href="#icon-scan" /></svg><p><strong>Открыли на компьютере?</strong><br />3D-просмотр доступен без камеры. Для AR можно использовать <a href="https://github.com/meta-quest/immersive-web-emulator" target="_blank" rel="noopener noreferrer">WebXR-эмулятор</a> с поддержкой hit-test и режимом AR.</p></div>
+      <p class="help-footnote">Объекты сохраняют положение в текущей AR-сессии. После её завершения сцена очищается.</p>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
