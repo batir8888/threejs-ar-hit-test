@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { MODEL_INFO, createModel, createContactShadow, createPlacedModel, disposeModel } from './models.js';
 import { HitTestPlacement } from './placement.js';
+import { cancelHitTestSource, requestViewerHitTestSource, surfaceSearchState, withXRTimeout } from './xr-runtime.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -16,6 +17,7 @@ const ui = {
   overlay: $('#xr-overlay'),
   status: $('#xr-status-text'),
   instruction: $('#xr-instruction'),
+  retry: $('#retry-surface'),
   place: $('#place-object'),
   clear: $('#clear-objects'),
   count: $('#placed-count'),
@@ -32,6 +34,13 @@ let supported = false;
 let rendererReady = false;
 let lastSurfaceState = '';
 let lastPlacementTime = 0;
+let hitTestPending = false;
+let hitTestError = '';
+let searchGeneration = 0;
+let searchTimer = null;
+let lastXRFrameAt = 0;
+let searchStateSince = 0;
+let searchPhase = 'tracking';
 
 const previewScene = new THREE.Scene();
 const arScene = new THREE.Scene();
@@ -161,7 +170,7 @@ async function checkSupport() {
     try {
       supported = await navigator.xr.isSessionSupported('immersive-ar');
       ui.supportLabel.textContent = supported ? 'AR готов' : '3D-просмотр · AR недоступен';
-      ui.supportHint.textContent = supported ? 'После запуска наведите камеру на пол или стол.' : 'Для AR откройте приложение на совместимом Android или в WebXR-эмуляторе.';
+      ui.supportHint.textContent = supported ? 'Для начала держите телефон в 0,5–1,5 м от пола или стола. Если вблизи изображение размыто, отодвиньте телефон.' : 'Для AR откройте приложение на совместимом Android или в WebXR-эмуляторе.';
     } catch {
       ui.supportLabel.textContent = 'Не удалось проверить поддержку AR';
       ui.supportHint.textContent = 'Проверьте разрешения браузера и откройте страницу через HTTPS.';
@@ -178,6 +187,7 @@ function showError(message) {
 }
 
 function explainSessionError(error) {
+  if (error.name === 'TimeoutError') return error.message;
   if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'Запуск AR не разрешён. Разрешите доступ к камере и AR в настройках браузера, затем попробуйте снова.';
   if (error.name === 'NotSupportedError') return 'Устройство должно поддерживать AR, поиск поверхности (hit-test) и пространство local-floor. Попробуйте совместимый Android или настройте WebXR-эмулятор.';
   if (error.name === 'InvalidStateError') return 'AR-сессия уже открыта или была прервана. Закройте её и повторите запуск.';
@@ -201,35 +211,37 @@ async function startAR() {
     session = requestedSession;
     placement.reset();
     lastSurfaceState = '';
+    resetSurfaceSearch();
     requestedSession.addEventListener('end', () => endSession(requestedSession), { once: true });
     requestedSession.addEventListener('visibilitychange', () => {
+      if (session !== requestedSession) return;
       if (requestedSession.visibilityState !== 'visible') {
         placement.hideReticle();
         placement.hasTracking = false;
         placement.objects.visible = false;
         updateARStatus();
+      } else {
+        // После разрешений, сворачивания или системного меню даём трекингу время.
+        lastXRFrameAt = searchStateSince = performance.now();
+        updateARStatus();
       }
     });
-    const [localFloorSpace, viewerSpace] = await Promise.all([
-      requestedSession.requestReferenceSpace('local-floor'),
-      requestedSession.requestReferenceSpace('viewer'),
-    ]);
-    if (session !== requestedSession) return;
-    const source = await requestedSession.requestHitTestSource({ space: viewerSpace });
-    if (session !== requestedSession) { source.cancel(); return; }
-    hitTestSource = source;
     controls.enabled = false;
     renderer.domElement.classList.add('xr-canvas');
     document.body.appendChild(renderer.domElement);
     document.body.classList.add('in-ar');
     ui.overlay.hidden = false;
     updateCounts();
+    updateARStatus();
     resizeRenderer();
-    await renderer.xr.setSession(requestedSession);
+    await withXRTimeout(renderer.xr.setSession(requestedSession), 'AR не смог начать показ камеры. Закройте другие приложения камеры и повторите запуск.');
     if (session !== requestedSession) return;
-    // Это же local-floor используется и рендерером, и hit.getPose(...).
-    renderer.xr.setReferenceSpace(localFloorSpace);
-    localFloorReferenceSpace = localFloorSpace;
+    // Three.js уже запросил local-floor. Используем ровно это пространство.
+    localFloorReferenceSpace = renderer.xr.getReferenceSpace();
+    lastXRFrameAt = searchStateSince = performance.now();
+    // Поиск запускается в animate только после первого кадра с позой камеры.
+    // Сначала подключаем render layer и дожидаемся трекинга, затем ищем плоскости.
+    searchTimer = setInterval(updateARStatus, 500);
     updateARStatus();
   } catch (error) {
     if (requestedSession && session === requestedSession) {
@@ -244,10 +256,47 @@ async function startAR() {
   }
 }
 
+function resetSurfaceSearch() {
+  searchGeneration++;
+  cancelHitTestSource(hitTestSource);
+  hitTestSource = null;
+  hitTestPending = false;
+  hitTestError = '';
+  placement.hideReticle();
+  lastXRFrameAt = searchStateSince = performance.now();
+  searchPhase = 'tracking';
+  lastSurfaceState = '';
+}
+
+async function beginSurfaceSearch() {
+  if (!session || !localFloorReferenceSpace || !placement.hasTracking || hitTestPending || hitTestSource || hitTestError) return;
+  const activeSession = session;
+  const generation = searchGeneration;
+  const isCurrent = () => session === activeSession && generation === searchGeneration;
+  hitTestPending = true;
+  updateARStatus();
+  try {
+    const source = await requestViewerHitTestSource(activeSession, isCurrent);
+    if (!isCurrent()) return;
+    hitTestSource = source;
+    searchStateSince = performance.now();
+  } catch (error) {
+    if (!isCurrent()) return;
+    hitTestError = error.name === 'TimeoutError' ? error.message : 'Не удалось начать поиск поверхности. Повторите поиск или заново откройте AR.';
+    console.warn('AR hit-test:', error.name, error.message);
+  } finally {
+    if (isCurrent()) {
+      hitTestPending = false;
+      updateARStatus();
+    }
+  }
+}
+
 function endSession(endedSession) {
   if (session !== endedSession) return;
-  try { hitTestSource?.cancel(); } catch { /* Источник уже закрыт вместе с сессией. */ }
-  hitTestSource = null;
+  clearInterval(searchTimer);
+  searchTimer = null;
+  resetSurfaceSearch();
   localFloorReferenceSpace = null;
   session = null;
   placement.reset();
@@ -268,8 +317,18 @@ function updateCounts() {
 }
 
 function updateARStatus() {
-  const state = !placement.hasTracking ? 'tracking' : placement.hasSurface ? 'surface' : 'searching';
-  ui.place.disabled = !placement.hasSurface || !placement.hasTracking;
+  if (!session) return;
+  const state = surfaceSearchState({
+    now: performance.now(), lastFrameAt: lastXRFrameAt, stateSince: searchStateSince,
+    hasTracking: placement.hasTracking, hasSurface: placement.hasSurface,
+    initializing: !localFloorReferenceSpace || hitTestPending,
+    error: hitTestError, visible: session.visibilityState === 'visible',
+  });
+  ui.place.disabled = state !== 'surface';
+  ui.retry.hidden = !['error', 'surface-timeout', 'tracking-timeout', 'stalled'].includes(state);
+  ui.retry.disabled = hitTestPending || starting;
+  ui.retry.dataset.restart = String(state === 'tracking-timeout' || state === 'stalled');
+  ui.retry.textContent = ui.retry.dataset.restart === 'true' ? 'Выйти и повторить запуск' : 'Повторить поиск';
   if (state === lastSurfaceState) return;
   lastSurfaceState = state;
   $('.xr-status').dataset.ready = String(state === 'surface');
@@ -278,15 +337,31 @@ function updateARStatus() {
     ui.instruction.textContent = 'Коснитесь экрана, чтобы разместить объект.';
   } else if (state === 'searching') {
     ui.status.textContent = 'Ищем поверхность…';
-    ui.instruction.textContent = 'Плавно наведите камеру на пол или стол.';
-  } else {
+    ui.instruction.textContent = 'Наклоните телефон вниз и медленно двигайте его. Держите расстояние 0,5–1,5 м до пола или стола; изображение должно быть чётким.';
+  } else if (state === 'tracking') {
     ui.status.textContent = 'Ожидаем трекинг…';
-    ui.instruction.textContent = 'Направьте камеру на пол и дождитесь трекинга.';
+    ui.instruction.textContent = 'Медленно перемещайте телефон над хорошо освещённым полом или столом с видимым рисунком.';
+  } else if (state === 'surface-timeout') {
+    ui.status.textContent = 'Поверхность пока не найдена';
+    ui.instruction.textContent = 'Если вблизи всё размыто, отодвиньте телефон. Наведите центр экрана на хорошо освещённый ковёр или стол с рисунком и медленно двигайте телефон.';
+  } else if (state === 'tracking-timeout' || state === 'stalled') {
+    ui.status.textContent = state === 'stalled' ? 'Камера AR не отвечает' : 'Не удалось начать трекинг';
+    ui.instruction.textContent = 'Повторите запуск AR. Если проблема остаётся, обновите Chrome и «Сервисы Google Play для AR», затем перезапустите Chrome.';
+  } else if (state === 'error') {
+    ui.status.textContent = 'Поиск поверхности не запустился';
+    ui.instruction.textContent = hitTestError;
+  } else if (state === 'paused') {
+    ui.status.textContent = 'AR на паузе';
+    ui.instruction.textContent = 'Вернитесь к приложению, чтобы продолжить поиск поверхности.';
+  } else {
+    ui.status.textContent = 'Подготавливаем AR…';
+    ui.instruction.textContent = 'Разрешите доступ к камере и направьте её на пол или стол.';
   }
 }
 
 function placeObject() {
   if (!session || session.visibilityState !== 'visible') return;
+  if (lastSurfaceState !== 'surface') return;
   // Дополнительная защита от двойного события DOM + select.
   const now = performance.now();
   if (now - lastPlacementTime < 250) return;
@@ -298,9 +373,24 @@ function placeObject() {
 
 function animate(timestamp, frame) {
   if (frame && session) {
+    lastXRFrameAt = performance.now();
     const referenceSpace = renderer.xr.getReferenceSpace();
     if (referenceSpace && session.visibilityState === 'visible') {
-      placement.update(frame, hitTestSource, referenceSpace);
+      try {
+        placement.update(frame, hitTestSource, referenceSpace);
+        const phase = !placement.hasTracking ? 'tracking' : placement.hasSurface ? 'surface' : 'searching';
+        if (phase !== searchPhase) {
+          searchPhase = phase;
+          searchStateSince = performance.now();
+        }
+        void beginSurfaceSearch();
+      } catch (error) {
+        cancelHitTestSource(hitTestSource);
+        hitTestSource = null;
+        placement.hideReticle();
+        hitTestError = 'Поиск поверхности прервался. Нажмите «Повторить поиск».';
+        console.warn('AR frame:', error.name, error.message);
+      }
     } else {
       placement.hideReticle();
       placement.hasTracking = false;
@@ -316,6 +406,15 @@ function animate(timestamp, frame) {
 }
 
 ui.start.addEventListener('click', startAR);
+ui.retry.addEventListener('click', async () => {
+  if (!session || starting) return;
+  if (ui.retry.dataset.restart === 'true') {
+    try { await session.end(); } catch { showError('Не удалось закрыть AR. Используйте системную кнопку выхода.'); }
+  } else {
+    resetSurfaceSearch();
+    updateARStatus();
+  }
+});
 ui.place.addEventListener('click', placeObject);
 ui.clear.addEventListener('click', () => { placement.clear(); updateCounts(); });
 $('#end-ar').addEventListener('click', async () => {
@@ -340,6 +439,9 @@ if (import.meta.env.DEV) {
       referenceSpace: localFloorReferenceSpace && renderer.xr.getReferenceSpace() === localFloorReferenceSpace ? 'local-floor' : null,
       hasSurface: placement.hasSurface,
       hasTracking: placement.hasTracking,
+      searchState: lastSurfaceState,
+      hitTestPending,
+      hasHitTestSource: Boolean(hitTestSource),
       count: placement.count,
       reticle: placement.reticle.matrix.toArray(),
       objects: placement.objects.children.map((object) => ({ kind: object.userData.kind, matrix: object.matrix.toArray(), world: object.matrixWorld.toArray() })),

@@ -70,6 +70,8 @@ button svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke
 .button-primary { color: #20331e; background: var(--accent); }
 .button-primary:hover:not(:disabled) { background: #d4ff95; }
 .button-primary:disabled { color: #bac6b3; background: #354332; }
+.button-secondary { margin-bottom: 10px; color: #edf4e9; background: var(--panel); border: 1px solid var(--border); }
+.button-secondary:hover:not(:disabled) { background: #293c2c; }
 .button-icon { display: grid; place-items: center; flex: 0 0 auto; width: 44px; height: 44px; padding: 0; color: #edf4e9; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; backdrop-filter: blur(10px); }
 .button-icon:disabled { opacity: 0.4; }
 .button-icon:hover:not(:disabled) { background: #293c2c; }
