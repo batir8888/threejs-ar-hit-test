@@ -32,7 +32,6 @@ let supported = false;
 let rendererReady = false;
 let lastSurfaceState = '';
 let lastPlacementTime = 0;
-let reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const previewScene = new THREE.Scene();
 const arScene = new THREE.Scene();
@@ -69,9 +68,7 @@ function initRenderer() {
     controls.enableZoom = false;
     controls.minPolarAngle = Math.PI * 0.18;
     controls.maxPolarAngle = Math.PI * 0.47;
-    controls.autoRotate = !reducedMotion;
-    controls.autoRotateSpeed = 0.55;
-    controls.addEventListener('start', () => { controls.autoRotate = false; });
+    controls.autoRotate = false;
 
     const grid = new THREE.GridHelper(4, 40, 0x9ab88a, 0x799a6e);
     grid.material.transparent = true;
@@ -121,7 +118,11 @@ function resizeRenderer() {
   const height = active ? window.innerHeight : ui.stage.clientHeight;
   if (width === 0 || height === 0) return;
   renderer.setSize(width, height, false);
+  const previousFit = Math.max(1, 0.95 / previewCamera.aspect);
   previewCamera.aspect = width / height;
+  const currentFit = Math.max(1, 0.95 / previewCamera.aspect);
+  // В портретном окне объект должен целиком помещаться по ширине.
+  previewCamera.position.sub(controls.target).multiplyScalar(currentFit / previousFit).add(controls.target);
   previewCamera.updateProjectionMatrix();
 }
 
@@ -136,15 +137,13 @@ function setModel(kind) {
   }
   $('#object-name').textContent = info.name;
   $('#preview-size').textContent = info.size;
-  $('#object-caption').textContent = info.caption;
-  $('#object-index').textContent = info.index;
   ui.stage.setAttribute('aria-label', `Интерактивный 3D-просмотр: ${info.name}`);
   if (!renderer) return;
   if (previewModel) disposeModel(previewModel);
   previewModel = createModel(kind);
   previewModel.add(createContactShadow(kind === 'cube' ? 0.3 : 0.5));
   previewScene.add(previewModel);
-  const distance = kind === 'cube' ? 1.15 : 1.75;
+  const distance = (kind === 'cube' ? 1.15 : 1.75) * Math.max(1, 0.95 / previewCamera.aspect);
   previewCamera.position.set(distance * 0.65, info.center + distance * 0.45, distance * 0.8);
   controls.target.set(0, info.center, 0);
   controls.update();
@@ -156,13 +155,13 @@ async function checkSupport() {
     ui.supportLabel.textContent = 'Для AR нужен HTTPS';
     ui.supportHint.textContent = 'Откройте опубликованную HTTPS-страницу. Локально используйте localhost.';
   } else if (!navigator.xr) {
-    ui.supportLabel.textContent = 'В этом браузере AR недоступен';
-    ui.supportHint.textContent = 'Откройте страницу на Android с поддержкой WebXR или используйте WebXR-эмулятор на компьютере.';
+    ui.supportLabel.textContent = '3D-просмотр · AR недоступен';
+    ui.supportHint.textContent = 'Для AR откройте приложение на совместимом Android или в WebXR-эмуляторе.';
   } else {
     try {
       supported = await navigator.xr.isSessionSupported('immersive-ar');
-      ui.supportLabel.textContent = supported ? 'Ваше устройство готово к AR' : 'На этом устройстве AR недоступен';
-      ui.supportHint.textContent = supported ? 'Камера включится после запуска. Выберите объект справа.' : '3D-просмотр работает. Для AR откройте страницу на совместимом Android или в WebXR-эмуляторе.';
+      ui.supportLabel.textContent = supported ? 'AR готов' : '3D-просмотр · AR недоступен';
+      ui.supportHint.textContent = supported ? 'После запуска наведите камеру на пол или стол.' : 'Для AR откройте приложение на совместимом Android или в WebXR-эмуляторе.';
     } catch {
       ui.supportLabel.textContent = 'Не удалось проверить поддержку AR';
       ui.supportHint.textContent = 'Проверьте разрешения браузера и откройте страницу через HTTPS.';
@@ -276,13 +275,13 @@ function updateARStatus() {
   $('.xr-status').dataset.ready = String(state === 'surface');
   if (state === 'surface') {
     ui.status.textContent = 'Поверхность найдена';
-    ui.instruction.textContent = 'Коснитесь экрана или нажмите кнопку, чтобы поставить объект на зелёное кольцо.';
+    ui.instruction.textContent = 'Коснитесь экрана, чтобы разместить объект.';
   } else if (state === 'searching') {
     ui.status.textContent = 'Ищем поверхность…';
-    ui.instruction.textContent = 'Плавно двигайте телефон, направив камеру на хорошо освещённый пол или стол.';
+    ui.instruction.textContent = 'Плавно наведите камеру на пол или стол.';
   } else {
     ui.status.textContent = 'Ожидаем трекинг…';
-    ui.instruction.textContent = 'Направьте камеру на окружающее пространство. Положение объектов восстановится при возвращении трекинга.';
+    ui.instruction.textContent = 'Направьте камеру на пол и дождитесь трекинга.';
   }
 }
 
@@ -329,16 +328,6 @@ for (const button of document.querySelectorAll('[data-model]')) {
 ui.overlay.addEventListener('beforexrselect', (event) => {
   if (event.target.closest('button, .xr-control')) event.preventDefault();
 });
-const help = $('#help-dialog');
-$('#show-help').addEventListener('click', () => help.showModal());
-$('#close-help').addEventListener('click', () => help.close());
-help.addEventListener('click', (event) => {
-  if (event.target === help) {
-    const rect = help.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) help.close();
-  }
-});
-
 initRenderer();
 void checkSupport();
 

@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 export const MODEL_INFO = {
-  cube: { name: 'Куб', size: '30 × 30 × 30 см', caption: 'Простая форма. Реальный масштаб.', index: '01 / 02', center: 0.15 },
-  chair: { name: 'Кресло', size: '56 × 64 × 52 см', caption: 'Маленькое кресло для большого мира.', index: '02 / 02', center: 0.29 },
+  cube: { name: 'Куб', size: '30 × 30 × 30 см', center: 0.15 },
+  chair: { name: 'Кресло', size: '56 × 64 × 52 см', center: 0.29 },
 };
 
 function roundedPart(parent, size, position, material, radius = 0.018) {
