@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { MODEL_INFO, createModel, createContactShadow, createPlacedModel, disposeModel } from './models.js';
+import { disposeModel } from './models.js';
+import { ModelManager } from './model-manager.js';
+import { ObjectController } from './object-controller.js';
+import { EnvironmentLighting } from './environment-lighting.js';
+import { UIController } from './ui-controller.js';
 import { HitTestPlacement } from './placement.js';
 import { cancelHitTestSource, requestViewerHitTestSource, surfaceSearchState, withXRTimeout } from './xr-runtime.js';
 import './style.css';
@@ -24,8 +28,10 @@ const ui = {
 };
 let renderer;
 let controls;
-let previewModel;
-let selectedModel = 'cube';
+let editor;
+let interfaceUI;
+let lighting;
+let previousTime = 0;
 let session = null;
 let hitTestSource = null;
 let localFloorReferenceSpace = null;
@@ -46,19 +52,8 @@ const previewScene = new THREE.Scene();
 const arScene = new THREE.Scene();
 const previewCamera = new THREE.PerspectiveCamera(36, 1, 0.01, 20);
 const arCamera = new THREE.PerspectiveCamera(70, 1, 0.01, 30);
-const placement = new HitTestPlacement(arScene, createPlacedModel, disposeModel);
-
-function addLights(scene) {
-  scene.add(new THREE.HemisphereLight(0xf2ffdf, 0x34452d, 2.5));
-  const key = new THREE.DirectionalLight(0xffffff, 3.5);
-  key.position.set(2, 4, 3);
-  scene.add(key);
-  const fill = new THREE.DirectionalLight(0xd3eea9, 1.1);
-  fill.position.set(-3, 2, -2);
-  scene.add(fill);
-}
-addLights(previewScene);
-addLights(arScene);
+const models = new ModelManager();
+const placement = new HitTestPlacement(arScene, () => models.create(editor.state), disposeModel);
 
 function initRenderer() {
   try {
@@ -91,7 +86,16 @@ function initRenderer() {
     );
     ring.position.y = 0.001;
     previewScene.add(ring);
-    setModel('cube');
+    const previewModel = models.create();
+    previewScene.add(previewModel);
+    editor = new ObjectController(models, previewModel, placement);
+    interfaceUI = new UIController(editor, placement);
+    previewCamera.position.set(1.1, 0.9, 1.35);
+    controls.target.set(0, 0.26, 0);
+    lighting = new EnvironmentLighting(renderer, [previewScene, arScene]);
+    void lighting.load(`${import.meta.env.BASE_URL}environments/royal_esplanade_1k.hdr`).then((status) => {
+      $('#lighting-status').textContent = status === 'hdri' ? 'HDRI' : 'Студийное окружение';
+    });
 
     // WebXR select работает с тапом на телефоне и контроллером эмулятора.
     for (let index = 0; index < 2; index++) {
@@ -135,29 +139,6 @@ function resizeRenderer() {
   previewCamera.updateProjectionMatrix();
 }
 
-function setModel(kind) {
-  if (!MODEL_INFO[kind]) return;
-  selectedModel = kind;
-  const info = MODEL_INFO[kind];
-  for (const button of document.querySelectorAll('[data-model]')) {
-    const selected = button.dataset.model === kind;
-    button.classList.toggle('selected', selected);
-    button.setAttribute('aria-pressed', String(selected));
-  }
-  $('#object-name').textContent = info.name;
-  $('#preview-size').textContent = info.size;
-  ui.stage.setAttribute('aria-label', `Интерактивный 3D-просмотр: ${info.name}`);
-  if (!renderer) return;
-  if (previewModel) disposeModel(previewModel);
-  previewModel = createModel(kind);
-  previewModel.add(createContactShadow(kind === 'cube' ? 0.3 : 0.5));
-  previewScene.add(previewModel);
-  const distance = (kind === 'cube' ? 1.15 : 1.75) * Math.max(1, 0.95 / previewCamera.aspect);
-  previewCamera.position.set(distance * 0.65, info.center + distance * 0.45, distance * 0.8);
-  controls.target.set(0, info.center, 0);
-  controls.update();
-}
-
 async function checkSupport() {
   supported = false;
   if (!window.isSecureContext) {
@@ -189,7 +170,7 @@ function showError(message) {
 function explainSessionError(error) {
   if (error.name === 'TimeoutError') return error.message;
   if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'Запуск AR не разрешён. Разрешите доступ к камере и AR в настройках браузера, затем попробуйте снова.';
-  if (error.name === 'NotSupportedError') return 'Устройство должно поддерживать AR, поиск поверхности (hit-test) и пространство local-floor. Попробуйте совместимый Android или настройте WebXR-эмулятор.';
+  if (error.name === 'NotSupportedError') return 'Устройство должно поддерживать AR, поиск поверхности (hit-test), пространство local-floor и HTML-интерфейс (dom-overlay). Попробуйте совместимый Android или настройте WebXR-эмулятор.';
   if (error.name === 'InvalidStateError') return 'AR-сессия уже открыта или была прервана. Закройте её и повторите запуск.';
   return 'Не удалось открыть AR-сессию. Проверьте доступ к камере и попробуйте снова.';
 }
@@ -204,12 +185,12 @@ async function startAR() {
   try {
     // Вызывается прямо из пользовательского клика: необходима user activation.
     requestedSession = await navigator.xr.requestSession('immersive-ar', {
-      requiredFeatures: ['hit-test', 'local-floor'],
-      optionalFeatures: ['dom-overlay'],
+      requiredFeatures: ['hit-test', 'local-floor', 'dom-overlay'],
       domOverlay: { root: ui.overlay },
     });
     session = requestedSession;
     placement.reset();
+    editor.select('');
     lastSurfaceState = '';
     resetSurfaceSearch();
     requestedSession.addEventListener('end', () => endSession(requestedSession), { once: true });
@@ -231,6 +212,7 @@ async function startAR() {
     document.body.appendChild(renderer.domElement);
     document.body.classList.add('in-ar');
     ui.overlay.hidden = false;
+    interfaceUI.setAR(true);
     updateCounts();
     updateARStatus();
     resizeRenderer();
@@ -300,6 +282,8 @@ function endSession(endedSession) {
   localFloorReferenceSpace = null;
   session = null;
   placement.reset();
+  editor.select('');
+  interfaceUI.setAR(false);
   ui.overlay.hidden = true;
   document.body.classList.remove('in-ar');
   renderer.domElement.classList.remove('xr-canvas');
@@ -314,6 +298,7 @@ function endSession(endedSession) {
 function updateCounts() {
   ui.count.textContent = String(placement.count);
   ui.clear.disabled = placement.count === 0;
+  interfaceUI?.render();
 }
 
 function updateARStatus() {
@@ -365,13 +350,17 @@ function placeObject() {
   // Дополнительная защита от двойного события DOM + select.
   const now = performance.now();
   if (now - lastPlacementTime < 250) return;
-  const object = placement.place(selectedModel);
+  const object = placement.place(editor.state.kind);
   if (!object) return;
   lastPlacementTime = now;
+  editor.select(object.uuid);
   updateCounts();
 }
 
 function animate(timestamp, frame) {
+  const delta = previousTime ? (timestamp - previousTime) / 1000 : 0;
+  previousTime = timestamp;
+  if (!document.hidden && (!session || session.visibilityState === 'visible')) editor?.update(delta, Boolean(session));
   if (frame && session) {
     lastXRFrameAt = performance.now();
     const referenceSpace = renderer.xr.getReferenceSpace();
@@ -416,16 +405,9 @@ ui.retry.addEventListener('click', async () => {
   }
 });
 ui.place.addEventListener('click', placeObject);
-ui.clear.addEventListener('click', () => { placement.clear(); updateCounts(); });
+ui.clear.addEventListener('click', () => { placement.clear(); editor.select(''); updateCounts(); });
 $('#end-ar').addEventListener('click', async () => {
   try { await session?.end(); } catch { showError('Не удалось закрыть AR. Используйте системную кнопку выхода.'); }
-});
-for (const button of document.querySelectorAll('[data-model]')) {
-  button.addEventListener('click', () => setModel(button.dataset.model));
-}
-// Нажатие UI не должно одновременно размещать объект через WebXR select.
-ui.overlay.addEventListener('beforexrselect', (event) => {
-  if (event.target.closest('button, .xr-control')) event.preventDefault();
 });
 initRenderer();
 void checkSupport();
@@ -436,6 +418,11 @@ if (import.meta.env.DEV) {
     refreshSupport: checkSupport,
     snapshot: () => ({
       active: Boolean(session),
+      lighting: lighting?.status,
+      environment: Boolean(arScene.environment),
+      arBackground: arScene.background,
+      selected: editor.selected.uuid,
+      preview: { ...editor.preview.userData.settings },
       referenceSpace: localFloorReferenceSpace && renderer.xr.getReferenceSpace() === localFloorReferenceSpace ? 'local-floor' : null,
       hasSurface: placement.hasSurface,
       hasTracking: placement.hasTracking,
@@ -444,7 +431,7 @@ if (import.meta.env.DEV) {
       hasHitTestSource: Boolean(hitTestSource),
       count: placement.count,
       reticle: placement.reticle.matrix.toArray(),
-      objects: placement.objects.children.map((object) => ({ kind: object.userData.kind, matrix: object.matrix.toArray(), world: object.matrixWorld.toArray() })),
+      objects: placement.objects.children.map((object) => ({ id: object.uuid, settings: { ...object.userData.settings }, kind: object.userData.kind, matrix: object.matrix.toArray(), world: object.matrixWorld.toArray() })),
       camera: arCamera.matrixWorld.toArray(),
     }),
   };

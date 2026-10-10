@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Практическая работа 4: Three.js / WebXR AR с размещением через hit-test",
+  "description": "Практическая работа 5: управление AR-объектами, HDRI и PBR",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/main.js && node --check src/models.js && node --check src/placement.js && node --check src/xr-runtime.js",
+    "check": "node tools/check.mjs",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

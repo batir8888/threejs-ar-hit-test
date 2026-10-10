@@ -4,6 +4,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 export const MODEL_INFO = {
   cube: { name: 'Куб', size: '30 × 30 × 30 см', center: 0.15 },
   chair: { name: 'Кресло', size: '56 × 64 × 52 см', center: 0.29 },
+  sphere: { name: 'Сфера', size: 'Диаметр 30 см', center: 0.15 },
 };
 
 function roundedPart(parent, size, position, material, radius = 0.018) {
@@ -17,10 +18,15 @@ export function createModel(kind) {
   const model = new THREE.Group();
   model.name = MODEL_INFO[kind].name;
   const green = new THREE.MeshStandardMaterial({ color: 0xb9e67d, roughness: 0.43, metalness: 0.06 });
+  green.userData.editable = true;
 
   // Нулевая высота модели совпадает с опорной плоскостью; единицы — метры.
   if (kind === 'cube') {
     roundedPart(model, [0.3, 0.3, 0.3], [0, 0.15, 0], green, 0.012);
+  } else if (kind === 'sphere') {
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.15, 48, 32), green);
+    sphere.position.y = 0.15;
+    model.add(sphere);
   } else {
     green.roughness = 0.95;
     roundedPart(model, [0.46, 0.12, 0.46], [0, 0.3, 0], green, 0.025);
